@@ -1,8 +1,12 @@
+"""Extract outlines of objects in images using a coin for scale."""
+
+from typing import Optional, Tuple
+
 import cv2
 import numpy as np
 import os
 import shutil
-from tkinter import Tk, Canvas, Button, Frame, Scale, HORIZONTAL, Toplevel, Label
+from tkinter import HORIZONTAL, Button, Canvas, Frame, Label, Scale, Tk, Toplevel
 from PIL import Image, ImageTk
 
 # === CONFIG ===
@@ -13,12 +17,18 @@ RETRY_FOLDER = "retry"
 os.makedirs(RETRY_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-def resize_for_display(img, max_height=900, max_width=1600):
+def resize_for_display(
+    img: np.ndarray, max_height: int = 900, max_width: int = 1600
+) -> np.ndarray:
+    """Resize ``img`` to fit within ``max_height`` and ``max_width``."""
     h, w = img.shape[:2]
     scale = min(max_width / w, max_height / h)
     return cv2.resize(img, (int(w * scale), int(h * scale)))
 
-def detect_coin_scale(image, lower_thresh=15, upper_thresh=45):
+def detect_coin_scale(
+    image: np.ndarray, lower_thresh: int = 15, upper_thresh: int = 45
+) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[np.ndarray]]:
+    """Detect a yellow coin and return its center, radius, and contour."""
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     lower_yellow = np.array([lower_thresh, 50, 50])
     upper_yellow = np.array([upper_thresh, 255, 255])
@@ -33,26 +43,39 @@ def detect_coin_scale(image, lower_thresh=15, upper_thresh=45):
         peri = cv2.arcLength(cnt, True)
         if peri == 0:
             continue
-        circ = 4 * np.pi * (area / (peri ** 2))
-        if 0.3 < circ < 1.3 and area > 100:
-            if circ > best_circularity:
-                best = cnt
-                best_circularity = circ
+        circ = 4 * np.pi * (area / (peri**2))
+        if 0.3 < circ < 1.3 and area > 100 and circ > best_circularity:
+            best = cnt
+            best_circularity = circ
 
     if best is None:
         return None, None, None, None
     (x, y), r = cv2.minEnclosingCircle(best)
     return int(x), int(y), int(r), best
 
-def extract_object_contour(image, coin_x, coin_y, threshold_val=0):
+def extract_object_contour(
+    image: np.ndarray, coin_x: int, coin_y: int, threshold_val: int = 0
+) -> Optional[np.ndarray]:
+    """Return the largest contour not overlapping the coin."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.medianBlur(gray, 5)
-    _, thresh = cv2.threshold(blurred, threshold_val, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU if threshold_val == 0 else cv2.THRESH_BINARY_INV)
+    _, thresh = cv2.threshold(
+        blurred,
+        threshold_val,
+        255,
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU if threshold_val == 0 else cv2.THRESH_BINARY_INV,
+    )
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered = [cnt for cnt in contours if cv2.pointPolygonTest(cnt, (float(coin_x), float(coin_y)), False) < 0]
     return max(filtered, key=cv2.contourArea) if filtered else None
 
-def modify_parameters(image, coin_contour, object_contour, image_name):
+def modify_parameters(
+    image: np.ndarray,
+    coin_contour: Optional[np.ndarray],
+    object_contour: Optional[np.ndarray],
+    image_name: str,
+) -> None:
+    """Allow the user to tweak detection parameters via a GUI."""
     top = Toplevel()
     top.title("Modify Detection Parameters")
 
@@ -107,7 +130,14 @@ def modify_parameters(image, coin_contour, object_contour, image_name):
     Button(top, text="Discard", command=discard).pack(side="right", padx=50, pady=10)
     top.mainloop()
 
-def show_verification_gui(original_image, object_contour, coin_contour, image_name, mm_per_pixel, full_image):
+def show_verification_gui(
+    original_image: np.ndarray,
+    object_contour: np.ndarray,
+    coin_contour: np.ndarray,
+    image_name: str,
+    mm_per_pixel: float,
+) -> None:
+    """Display the detected outline and ask the user to verify it."""
     window = Tk()
     window.title("Is the outline correct?")
     main_frame = Frame(window)
@@ -164,24 +194,14 @@ def show_verification_gui(original_image, object_contour, coin_contour, image_na
 
     def on_modify():
         modify_parameters(original_image, coin_contour, object_contour, image_name)
-        # Resize preview to fit screen
-        preview_img = resize_for_display(modified)  # Prevent extreme zoom
-        preview_rgb = cv2.cvtColor(preview_img, cv2.COLOR_BGR2RGB)
-        preview_pil = Image.fromarray(preview_rgb)
-        tk_preview = ImageTk.PhotoImage(preview_pil)
-
-        # Display resized preview
-        preview_label = Label(modify_win, image=tk_preview)
-        preview_label.image = tk_preview  # Keep reference
-        preview_label.pack()
-
 
     Button(window, text="YES", command=on_yes, height=2, width=20, bg='green', fg='white').pack(side="left", padx=30, pady=10)
     Button(window, text="NO", command=on_no, height=2, width=20, bg='red', fg='white').pack(side="right", padx=30, pady=10)
     Button(window, text="Modify", command=on_modify, height=2, width=20, bg='blue', fg='white').pack(pady=10)
     window.mainloop()
 
-def run_image(img_name):
+def run_image(img_name: str) -> None:
+    """Process a single image and display results."""
     full_path = os.path.join(INPUT_FOLDER, img_name)
     image = cv2.imread(full_path)
     if image is None:
@@ -199,8 +219,15 @@ def run_image(img_name):
         shutil.move(full_path, os.path.join(RETRY_FOLDER, img_name))
         return
 
-    show_verification_gui(image, object_contour, coin_contour, img_name, mm_per_pixel, image)
+    show_verification_gui(image, object_contour, coin_contour, img_name, mm_per_pixel)
 
-for img_name in os.listdir(INPUT_FOLDER):
-    if img_name.lower().endswith((".jpg", ".jpeg", ".png")):
-        run_image(img_name)
+
+def main() -> None:
+    """Run the outline extraction on all images in ``INPUT_FOLDER``."""
+    for img_name in os.listdir(INPUT_FOLDER):
+        if img_name.lower().endswith((".jpg", ".jpeg", ".png")):
+            run_image(img_name)
+
+
+if __name__ == "__main__":
+    main()
